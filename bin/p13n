@@ -1,0 +1,794 @@
+#!/bin/sh
+
+self="$(cd "$(dirname "$0")"; pwd)/$(basename "$0")"
+self_short="$(basename "$0")"
+p13n_home="$(dirname "$(dirname "$self")")"
+p13n_conf="$HOME/.p13n"
+p13n_bundles="$p13n_conf/bundles"
+verbosity=1
+debug=false
+quiet=false
+dry_run=false
+dry_run_prefix=""
+backup_ext=".p13n-$(date '+%Y%m%d_%H%M%S')"
+
+NAME_PARAM="name"
+FILESDIR_PARAM="filesdir"
+MERGEDIR_PARAM="mergedir"
+
+BUNDLE_CONF_FILE="p13n.conf"
+BUNDLE_FILES_LIST="files"
+BUNDLE_MERGERS_LIST="mergers"
+
+main() {
+	# Process global options
+	while test $# -gt 0; do
+		arg="$1"
+		shift
+		case "$arg" in
+			-v|--verbose)
+				verbosity=$((verbosity + 1))
+				;;
+			-d|--debug)
+				debug=true
+				;;
+			-q|--quiet)
+				quiet=true
+				;;
+			-n|--dry-run)
+				dry_run=true
+				dry_run_prefix="[DRY RUN] "
+				;;
+			-h|--help)
+				print_help
+				return 0
+				;;
+			--)
+				break
+				;;
+			-*)
+				echo "$self_short: unknown option: $arg" >&2
+				print_usage >&2
+				return 1
+				;;
+			*)
+				set -- "$arg" "$@"
+				break
+				;;
+		esac
+	done
+
+	if $quiet; then
+		verbosity=0
+	fi
+
+	if $debug; then
+		set -x
+	fi
+
+	if test $# -eq 0; then
+		echo "$self_short: expecting command" >&2
+		print_usage >&2
+		return 1
+	fi
+
+	cmd="$1"
+	shift
+
+	case "$cmd" in
+		install)
+			do_install "$@"
+			return $?
+			;;
+		update)
+			do_update "$@"
+			return $?
+			;;
+		refresh)
+			do_refresh "$@"
+			return $?
+			;;
+		*)
+			echo "$self_short: unknown command: $cmd" >&2
+			print_usage >&2
+			return 1
+			;;
+	esac
+}
+
+print_usage() {
+	cat <<-EOF
+	usage: $self_short [-dvq] cmd [cmd args]
+	       $self_short cmd --help
+	       $self_short --help
+	EOF
+}
+
+print_help() {
+	print_usage
+	cat <<-EOF
+
+	Options:
+	    -v, --verbose               Increase the verbosity by one. This may be
+	                                specified more than once.
+	    -q, --quiet                 Execute quietly. Do not produce any output
+	                                (except for errors and debugging). Cancels
+	                                any -v or --verbose options.
+	    -n, --dry-run               Don't actually perform any destructive actions,
+	                                but figure out what would be performed.
+	
+	Commands:
+	    install                     Install a p13n bundle.
+	    refresh                     Refresh dynamically generated files from
+	                                installed p13n bundles.
+	    update                      Update existing bundles, installing new files
+	                                or removing files that no longer belong to
+	                                to the bundle.
+
+	Advanced Options:
+	    -d, --debug                 Enable debugging (very verbose; for experts).
+	EOF
+}
+
+########
+## install <options> <bundles>
+##
+## The "install" sub-command.
+do_install() {
+	while test $# -gt 0; do
+		arg="$1"
+		shift
+		case "$arg" in
+			-h|--help)
+				print_install_help
+				return 0
+				;;
+			--)
+				break
+				;;
+			-*)
+				echo "$self_short: Unknown install option: $arg" >&2
+				print_install_usage >&2
+				return 1
+				;;
+			*)
+				set -- "$arg" "$@"
+				break
+				;;
+		esac
+	done
+
+	if test $# -le 0; then
+		echo "$self_short: No package directory specified: $@" >&2
+		print_install_usage >&2
+		return 1
+	fi
+
+	# Check all packages first for correctness, then install
+	for dir; do
+		verify_bundle_source "$dir" || return
+
+		conf_file="$dir/$BUNDLE_CONF_FILE"
+		name="$(read_config "$conf_file" "$NAME_PARAM")"
+		if test -e "$p13n_bundles/$name/home"; then
+			echo "$self_short: p13n bundle $name already appears to be installed" >&2
+			return 1
+		fi
+	done
+
+	for dir; do
+		dir="$(cd "$dir"; pwd)"
+		conf_file="$dir/$BUNDLE_CONF_FILE"
+		name="$(read_config "$conf_file" "$NAME_PARAM")"
+		bndl_home="$p13n_bundles/$name"
+
+		run_destructive_command mkdir -p "$bndl_home" || return
+		install_bundle_files "$dir" || return
+
+		# Link this bundle back to its source, for updates etc.
+		bndl_home_link="$bndl_home/home"
+		run_destructive_command ln -snf "$(relative_link "$dir" "$bndl_home_link")" "$bndl_home_link"
+	done
+
+	# Although it possible to figure out which mergers are affected by
+	# the install, it's likely easier to unconditionally update all mergers
+	# Now that new source bundles are available.
+	if $dry_run; then
+		# For a dry run, no files are installed. It's better to 
+		# show what would be done for the bundles being installed.
+		for dir; do
+			dir="$(cd "$dir"; pwd)"
+			conf_file="$dir/$BUNDLE_CONF_FILE"
+			name="$(read_config "$conf_file" "$NAME_PARAM")"
+			mergedir="$(read_config "$conf_file" "$MERGEDIR_PARAM")"
+
+			if test "x$mergedir" != "x"; then
+				abs_mergedir="$(cd "$dir/$mergedir"; pwd)"
+				iterate_all_files "$abs_mergedir" \
+					update_merger "$dir" "$abs_mergedir/" "$HOME/"
+			fi
+		done
+	else
+		update_mergers
+	fi
+}
+
+print_install_usage() {
+	cat <<-EOF
+	usage: $self_short install dir [dir [...]]
+	       $self_short install --help
+	EOF
+}
+
+print_install_help() {
+	print_install_usage
+	cat <<-EOF
+
+	Install one or more p13n bundles into the environment.
+
+	This is destructive and will replace any target files that already exist.
+	Perform a dry-run (-n) to see what files will be installed.
+
+	Parameters:
+	    dir                         The directory of the p13n bundle to install.
+	EOF
+}
+
+########
+## update <options> [<bundles>]
+##
+## The "update" sub-command.
+do_update(){
+	while test $# -gt 0; do
+		arg="$1"
+		shift
+		case "$arg" in
+			-h|--help)
+				print_update_help
+				return 0
+				;;
+			--)
+				break
+				;;
+			-*)
+				echo "$self_short: Unknown update option: $arg" >&2
+				print_update_usage >&2
+				return 1
+				;;
+			*)
+				set -- "$arg" "$@"
+				break
+				;;
+		esac
+	done
+
+	if test $# -le 0; then
+		iterate_installed_bundles verify_installed_bundle_source || return
+		iterate_installed_bundles update_bundle_files || return
+	else
+		for bundle; do
+			if ! test -d "$p13n_bundles/$bundle"; then
+				echo "$self_short: Unknown bundle: $bundle"
+				return 1
+			fi
+			verify_bundle_source "$(read_link "$p13n_bundles/$bundle/home")" || return
+		done
+
+		for bundle; do
+			update_bundle_files "$bundle" "$p13n_bundles/$bundle" "$(read_link "$p13n_bundles/$bundle/home")" || return
+		done
+	fi
+
+	update_mergers
+}
+
+print_update_usage() {
+	cat <<-EOF
+	usage: $self_short update [bundle [bundle [...]]]
+	       $self_short update --help
+	EOF
+}
+
+print_update_help() {
+	print_update_usage
+	cat <<-EOF
+
+	Update one or more p13n bundle that have already been installed on the system.
+
+	This is destructive and will replace any target files that already exist.
+	Perform a dry-run (-n) to see what files will be installed.
+
+	If no bundles are specified, all bundles will be updated.
+
+	Parameters:
+	    bundle                      The name of the p13n bundle to update.
+	EOF
+}
+
+########
+## do_refresh <options>
+##
+## The "refresh" sub-command
+do_refresh() {
+	while test $# -gt 0; do
+		arg="$1"
+		shift
+		case "$arg" in
+			-h|--help)
+				print_refresh_help
+				return 0
+				;;
+			--)
+				break
+				;;
+			-*)
+				echo "$self_short: Unknown install option: $arg" >&2
+				print_refresh_usage >&2
+				return 1
+				;;
+			*)
+				set -- "$arg" "$@"
+				break
+				;;
+		esac
+	done
+
+	if test $# -gt 0; then
+		echo "$self_short: unexpected parameters specified: $@" >&2
+		print_refresh_usage >&2
+		return 1
+	fi
+
+	update_mergers
+}
+
+print_refresh_usage() {
+	cat <<-EOF
+	usage: $self_short refresh
+	       $self_short refresh --help
+	EOF
+}
+
+print_refresh_help() {
+	print_refresh_usage
+	cat <<-EOF
+
+	Refresh dynamically generated files associated with installed p13n bundles.
+
+	Files that are the result of a merge operation may need to be refreshed when
+	at least one of the source files has been updated (e.g., if the merged file
+	is not generated by "including" the source file).
+
+	EOF
+}
+
+########
+## install_bundle_files <source>
+install_bundle_files() {
+	__ibf_source="$1"
+
+	__ibf_conf_file="$__ibf_source/$BUNDLE_CONF_FILE"
+	__ibf_name="$(read_config "$__ibf_conf_file" "$NAME_PARAM")"
+	__ibf_filesdir="$(read_config "$__ibf_conf_file" "$FILESDIR_PARAM")"
+	__ibf_mergedir="$(read_config "$__ibf_conf_file" "$MERGEDIR_PARAM")"
+	__ibf_home="$p13n_bundles/$__ibf_name"
+
+	__ibf_files="$__ibf_home/$BUNDLE_FILES_LIST"
+	clear_filelist "$__ibf_files"
+	if test "x$__ibf_filesdir" != "x"; then
+		__ibf_abs_filesdir="$(cd "$__ibf_source/$__ibf_filesdir"; pwd)"
+		iterate_all_files "$__ibf_abs_filesdir" \
+			install_file "$__ibf_files" "$__ibf_abs_filesdir/" "$HOME/"
+	fi
+
+	__ibf_mergers="$__ibf_home/$BUNDLE_MERGERS_LIST"
+	clear_mergers "$__ibf_mergers"
+	if test "x$__ibf_mergedir" != "x"; then
+		__ibf_abs_mergedir="$(cd "$__ibf_source/$__ibf_mergedir"; pwd)"
+		iterate_all_files "$__ibf_abs_mergedir" \
+			install_merger "$__ibf_mergers/" "$__ibf_abs_mergedir/" "$HOME/"
+	fi
+}
+
+########
+## remove_bundle_files <name> <home> <source>
+remove_bundle_files() {
+	__rbf_name="$1"
+	__rbf_home="$2"
+	__rbf_source="$3"
+
+	__rbf_files="$__rbf_home/$BUNDLE_FILES_LIST"
+	if test -f "$__rbf_files"; then
+		cat "$__rbf_files" | while read __rbf_file; do
+			info "${dry_run_prefix}Remove:  $__rbf_file"
+			run_destructive_command rm -f "$__rbf_file"
+		done
+	fi
+
+	__rbf_mergers="$__rbf_home/$BUNDLE_MERGERS_LIST"
+	iterate_all_files "$__rbf_mergers" remove_merger "$HOME/"
+}
+
+########
+## update_bundle_files <name> <home> <source>
+update_bundle_files() {
+	__ubf_name="$1"
+	__ubf_home="$2"
+	__ubf_source="$3"
+
+	remove_bundle_files "$__ubf_name" "$__ubf_home" "$__ubf_source" || return
+	install_bundle_files "$__ubf_source" || return
+}
+
+########
+## verify_installed_bundle_source <name> <home> <source>
+verify_installed_bundle_source() {
+	verify_bundle_source "$3"
+}
+
+########
+## install_file <file_list> <srcdir> <dstdir> <dstdir> <src> <dst>
+install_file() {
+	__dif_filelist="$1"
+	__dif_srcdir="$2"
+	__dif_dstdir="$3"
+	__dif_src="$4"
+	__dif_dst="$5"
+
+	__dif_abssrc="$__dif_srcdir$__dif_src"
+	__dif_absdst="$__dif_dstdir$__dif_dst"
+	__dif_rellink="$(relative_link "$__dif_abssrc" "$__dif_absdst")"
+	__dif_absdstdir="$(dirname "$__dif_absdst")"
+
+	info "${dry_run_prefix}Install: $__dif_dst"
+	verbose "Relative link: $__dif_rellink"
+	run_destructive_command mkdir -p "$__dif_absdstdir"
+	if test -e "$__dif_absdst" -a ! -L "$__dif_absdst"; then
+		info "${dry_run_prefix}Backup: $__dif_dst$backup_ext"
+		run_destructive_command mv "$__dif_absdst" "$__dif_absdst$backup_ext"
+	fi
+	run_destructive_command ln -snf "$__dif_rellink" "$__dif_absdst"
+	append_filelist "$__dif_dst" "$__dif_filelist"
+}
+
+########
+## install_merger <mergers> <srcdir> <dstdir> <src> <dst>
+install_merger() {
+	__dim_mergers="$1"
+	__dim_srcdir="$2"
+	__dim_dstdir="$3"
+	__dim_src="$4"
+	__dim_dst="$5"
+
+	__dim_abssrc="$__dim_srcdir$__dim_src"
+	__dim_absdst="$__dim_mergers$__dim_src"
+	__dim_absdstdir="$(dirname "$__dim_absdst")"
+
+	__dim_rellink="$(relative_link "$__dim_abssrc" "$__dim_absdst")"
+
+	info "${dry_run_prefix}Setup Merger: $__dim_dst"
+	verbose "Relative link: $__dim_rellink"
+	run_destructive_command mkdir -p "$__dim_absdstdir"
+	run_destructive_command ln -snf "$__dim_rellink" "$__dim_absdst"
+
+	__dim_absins="$__dim_dstdir$__dim_dst"
+	if test -e "$__dim_absins" -a ! -L "$__dim_absins"; then
+		info "${dry_run_prefix}Backup: $__dim_dst$backup_ext"
+		run_destructive_command mv "$__dim_absins" "$__dim_absins$backup_ext"
+	fi
+}
+
+########
+## remove_merger <dst_dir> <src> <dst>
+remove_merger() {
+	__rm_dstdir="$1"
+	__rm_dst="$3"
+
+	info "${dry_run_prefix}Delete Merger: $__rm_dst"
+	run_destructive_command rm -f "$__rm_dstdir$__rm_dst"
+}
+
+########
+## update_mergers
+update_mergers() {
+	iterate_installed_bundles update_bndl_mergers
+}
+
+########
+## update_bndl_mergers <bndl_home>
+update_bndl_mergers() {
+	__um_bndl_name="$1"
+	__um_bndl_dir="$2"
+	__um_bndl_home="$3"
+	__um_mergers="$__um_bndl_dir/$BUNDLE_MERGERS_LIST"
+
+	if ! test -d "$__um_mergers"; then
+		return 0
+	fi
+
+	debug "${dry_run_prefix}Update Bundle Mergers: $__um_bndl_dir"
+	iterate_all_files "$__um_mergers" \
+		update_merger "$__um_bndl_dir" "$__um_mergers/" "$HOME/"
+}
+
+########
+## update_merger <bndl_home> <srcdir> <dstdir> <src> <dir>
+update_merger() {
+	__dum_bndl_home="$1"
+	__dum_srcdir="$2"
+	__dum_dstdir="$3"
+	__dum_src="$4"
+	__dum_dst="$5"
+
+	__dum_abssrc="$__dum_srcdir$__dum_src"
+	__dum_absdst="$__dum_dstdir$__dum_dst"
+
+	__dum_merger="$(read_config "$__dum_abssrc" "merger")"
+	__dum_mergesrcdir="$(read_config "$__dum_abssrc" "srcdir")"
+
+	info "${dry_run_prefix}Merging: $__dum_dst"
+	if test "x$__dum_merger" = "x"; then
+		__dum_merger="cat"
+	else
+		if ! echo "$__dum_merger" | grep '^/' > /dev/null 2>&1; then
+			__dum_merger="$__dum_bndl_home/home/$__dum_merger"
+		fi
+	fi
+	if test "x$__dum_mergesrcdir" = "x"; then
+		__dum_mergesrcdir="${__dum_absdst}.d"
+	fi
+
+	run_destructive_command rm -f "$__dum_absdst"
+	if $dry_run; then
+		find -L "$__dum_mergesrcdir" -mindepth 1 -maxdepth 1 -type f 2> /dev/null | sort |
+			while read __dum_srcfile; do
+				debug "Including: $__dum_srcfile"
+			done
+	else
+		find -L "$__dum_mergesrcdir" -mindepth 1 -maxdepth 1 -type f 2> /dev/null | sort |
+			xargs "$__dum_merger" > "$__dum_absdst"
+	fi
+}
+
+########
+## verify_bundle_source <dir>
+verify_bundle_source() {
+	__vb_dir="$1"
+
+	__vb_conf_file="$__vb_dir/$BUNDLE_CONF_FILE"
+	if test ! -r "$__vb_conf_file" -o -d "$__vb_conf_file"; then
+		echo "$self_short: $__vb_dir does not appear to be a p13n package" >&2
+		echo "" >&2
+		echo "Missing config file: $__vb_conf_file" >&2
+		return 1
+	fi
+
+	# required parameters
+	for __vb_param in "$NAME_PARAM"; do
+		value="$(read_config "$__vb_conf_file" "$__vb_param")"
+		if test "x$value" = "x"; then
+			echo "$self_short: $__vb_dir is a malformed package: $__vb_param not defined" >&2
+			return 1
+		fi
+	done
+
+	# Optional parameters, but need at least one
+	__vb_missing_work=true
+	for __vb_param in "$FILESDIR_PARAM" "$MERGEDIR_PARAM"; do
+		value="$(read_config "$__vb_conf_file" "$__vb_param")"
+		if test "x$value" != "x"; then
+			__vb_missing_work=false
+			break
+		fi
+	done
+	if $__vb_missing_work; then
+		echo "$self_short: $__vb_dir is a malformed package: must have one of $FILESDIR_PARAM, $MERGEDIR_PARAM defined" >&2
+		return 1
+	fi
+}
+
+run_destructive_command() {
+	debug "${dry_run_prefix}Executing: $@"
+	if ! $dry_run; then
+		"$@"
+	fi
+}
+
+clear_filelist() {
+	debug "${dry_run_prefix}Clearing file list: $1"
+	if ! $dry_run; then
+		rm -f "$1"
+	fi
+}
+
+append_filelist() {
+	debug "${dry_run_prefix}Appending to file list: $1 >> $2"
+	if ! $dry_run; then
+		echo "$1" >> "$2"
+	fi
+}
+
+clear_mergers() {
+	debug "${dry_run_prefix}Clearing mergers: $1"
+	if ! $dry_run; then
+		rm -rf "$1"
+	fi
+}
+
+info() {
+	if test $verbosity -gt 0; then
+		echo "$@" >&2
+	fi
+}
+
+verbose() {
+	if test $verbosity -gt 1; then
+		echo "$@" >&2
+	fi
+}
+
+debug() {
+	if test $verbosity -gt 2; then
+		echo "$@" >&2
+	fi
+}
+
+########
+## iterate_installed_bundles <callable>
+##
+## Where callable is invoked for each bundle:
+##    <callable> <name> <bundle_dir> <home>
+iterate_installed_bundles() {
+	find "$p13n_bundles" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2> /dev/null |
+	while read __iib_bundle; do
+		"$@" "$__iib_bundle" "$p13n_bundles/$__iib_bundle" "$(read_link "$p13n_bundles/$__iib_bundle/home")" || return
+	done
+}
+
+########
+## iterate_all_files <dir> <callable>
+##
+## Where callable is invoked for each file:
+##    <callable> <srcfile> <dstfile>
+iterate_all_files() {
+	__iaf_dir="$1"
+	shift
+	find -L "$__iaf_dir" -mindepth 1 -type f -not -name '.*' 2> /dev/null | cut -b $((${#__iaf_dir} + 2))- | while read __iaf_file; do
+		"$@" "$__iaf_file" "$(echo "$__iaf_file" | sed -e 's|/_|/.|g' -e 's|^_|.|')"
+	done
+}
+
+########
+## relative_link <src> <dst>
+##
+## Create the source link for a relative symbolic from absolute source and
+## destination paths. Unlike the ln command, the destination must be the exact
+## path of the link (it can't be the directory the link will appear in, having
+## the same name as the source file).
+relative_link() {
+	__rl_src="$1"
+	__rl_dst="$2"
+
+	# Remove common prefixes
+	while test -n "$__rl_src"; do
+		__rl_src_first="$(get_path_head "$__rl_src")"
+		__rl_dst_first="$(get_path_head "$__rl_dst")"
+		if test "x$__rl_src_first" = "x" -o "x$__rl_dst_first" = "x"; then
+			break
+		elif test "x$__rl_src_first" != "x$__rl_dst_first"; then
+			break
+		fi
+		__rl_src="$(strip_prefix "$__rl_src" "$__rl_src_first")"
+		__rl_dst="$(strip_prefix "$__rl_dst" "$__rl_dst_first")"
+	done
+
+	# Add ../ to the path to compensate for destination depth
+	while true; do
+		__rl_dst_first="$(get_path_head "$__rl_dst")"
+		if test "x$__rl_dst_first" = "x"; then
+			break
+		fi
+		__rl_src="/..$__rl_src"
+		__rl_dst="$(strip_prefix "$__rl_dst" "$__rl_dst_first")"
+		__rl_up_traversal=true
+	done
+
+	echo "${__rl_src#?}"
+}
+
+########
+## read_link <link>
+##
+## Determine the absolute path to a linked file.
+read_link() {
+	__rl_path="$1"
+	while true; do
+		__rl_deref="$(readlink "$__rl_path")"
+		if test "x$__rl_deref" = "x"; then
+			break;
+		fi
+
+		if echo "x$__rl_deref" | grep '^x/' > /dev/null 2>&1; then
+			__rl_path="$__rl_deref"
+		else
+			__rl_path="$(dirname "$__rl_path")/$__rl_deref"
+		fi
+	done
+
+	echo "$(cd "$(dirname "$__rl_path")"; pwd)/$(basename "$__rl_path")"
+}
+
+get_path_head() {
+	__gph="$(echo "$1" | sed 's|^\(/[^/]\{1,\}\)/.*$|\1|')"
+	if test "x$__gph" != "x$1"; then
+		echo "$__gph"
+	fi
+}
+
+strip_prefix() {
+	echo "$1" | cut -b $((${#2} + 1))-
+}
+
+read_config() {
+	awk -F= "\$1 == \"$2\" { print \$2; }" "$1" | tail -n1
+}
+
+# Very simple version of getopt, that splits parameters making it easier to
+# interpret
+__getopt() {
+	__getopt_ret=""
+	while test $# -gt 0; do
+		__getopt_arg="$1"
+		shift
+		case "$__getopt_arg" in
+			--)
+				break
+				;;
+			--*)
+				if test "x${__getopt_arg#*=}" != "x$__getopt_arg"; then
+					__getopt_opt="$(echo "$__getopt_arg" | sed 's/^\([^=]*\)=.*$/\1/')"
+					__getopt_arg="$(echo "$__getopt_arg" | sed 's/^[^=]*=\(.*\)$/\1/')"
+					__getopt_ret="$__getopt_ret $(__quote "$__getopt_opt") $(__quote "$__getopt_arg")"
+				else
+					__getopt_ret="$__getopt_ret $(__quote "$__getopt_arg")"
+				fi
+				;;
+			-*)
+				__getopt_arg="${__getopt_arg#?}" # Strip off leading -
+				while test -n "$__getopt_arg"; do
+					# The initial thought of using sed to put whitespace between the
+					# characters doesn't quite work, as a user can pass in shell
+					# glob characters.
+					__getopt_opt="$(echo "$__getopt_arg" | sed 's/^\(.\).*$/\1/')"
+					__getopt_arg="$(echo "$__getopt_arg" | sed 's/^.\(.*\)$/\1/')"
+					__getopt_ret="$__getopt_ret $(__quote "-$__getopt_opt")"
+				done
+				;;
+			*)
+				__getopt_ret="$__getopt_ret $(__quote "$__getopt_arg")"
+				;;
+		esac
+	done
+
+	if test $# -gt 0; then
+		__getopt_ret="$__getopt_ret -- $(__quote "$@")"
+	fi
+	echo "${__getopt_ret#?}"
+}
+
+__quote() {
+	__quote_ret=""
+	for __quote_arg; do
+		if echo "x${__quote_arg}" | grep "[^a-zA-Z0-9_+./-]" > /dev/null 2>&1; then
+			__quote_ret="$__quote_ret '$(echo "$__quote_arg" | sed "s/'/'\\\\''/g")'"
+		else
+			__quote_ret="$__quote_ret $__quote_arg"
+		fi
+	done
+
+	# echo on some systems can swallow option-like strings (such as -n).
+	# printf doesn't have this problem.
+	printf "%s" "${__quote_ret#?}"
+}
+
+eval "main $(__getopt "$@")"

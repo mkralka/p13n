@@ -1,0 +1,55 @@
+# vim: set filetype=sh:
+
+# Source global definitions
+if test -f /etc/bashrc; then
+	. /etc/bashrc
+fi
+
+##
+## Bootstrapping
+##
+
+# Attempt to figure out where the p13n home is.
+__p13n_home="$(cd "$HOME" > /dev/null 2>&1 && cd "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink .bashrc)")")")")" > /dev/null 2>&1 && pwd)"
+if test -n "$__p13n_home"; then
+	# Load any functions it defines.
+	for __p13n_file in `find -L $__p13n_home/bundles/bash/libexec -maxdepth 1 -mindepth 1 -type f -name '*.sh'`; do
+		. "$__p13n_file"
+	done
+
+	append_path "$__p13n_home/bin"
+fi
+
+##
+## Environment detection
+##
+
+p13n_macosx=false
+p13n_linux=false
+case "$OSTYPE" in
+darwin*) p13n_macosx=true ;;
+linux*) p13n_linux=true ;;
+esac
+
+# Finally load files form $HOME/.bashrc.d, for third-party initialization
+for __p13n_file in `find -L $HOME/.bashrc.d -type f -name '[^.]*.sh' 2> /dev/null | sort`; do
+	# Attempt to resolve symbolic links so that the real file name is
+	# specified when importing. This is because some scripts might assume
+	# that $0 or BASH_SOURCE are properly set.
+	if ! test -r "$__p13n_file"; then
+		continue
+	fi
+
+	# This will terminate because the file is readable
+	while test -L "$__p13n_file"; do
+		__p13n_link="$(readlink "$__p13n_file")"
+		if test -z "$__p13n_link"; then
+			break
+		fi
+		__p13n_file="$(cd "$(dirname "$__p13n_file")" && cd "$(dirname "$__p13n_link")" && pwd)/$(basename "$__p13n_link")"
+	done
+	. "$__p13n_file"
+done
+
+# Unset any temporary variables defined by p13n
+unset `set | awk -F= '/^__p13n_.*=/ { print $1 }'`

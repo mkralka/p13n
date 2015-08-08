@@ -1,0 +1,6 @@
+# vim: set filetype=sh:
+
+# Finally load files form $HOME/.profile.d, for third-party initialization
+for file in `find -L $HOME/.profile.d -type f -name '[^.]*.sh' 2> /dev/null | sort`; do
+	. "$file"
+done
