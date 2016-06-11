@@ -98,7 +98,7 @@ main() {
 
 print_usage() {
 	cat <<-EOF
-	usage: $self_short [-dvq] cmd [cmd args]
+	usage: $self_short [-dnqv] cmd [cmd args]
 	       $self_short cmd --help
 	       $self_short --help
 	EOF
@@ -427,7 +427,7 @@ verify_installed_bundle_source() {
 }
 
 ########
-## install_file <file_list> <srcdir> <dstdir> <dstdir> <src> <dst>
+## install_file <file_list> <srcdir> <dstdir> <src> <dst>
 install_file() {
 	__dif_filelist="$1"
 	__dif_srcdir="$2"
@@ -495,20 +495,18 @@ update_mergers() {
 }
 
 ########
-## update_bndl_mergers <bndl_home>
+## update_bndl_mergers <name> <home> <source>
 update_bndl_mergers() {
-	__um_bndl_name="$1"
-	__um_bndl_dir="$2"
-	__um_bndl_home="$3"
-	__um_mergers="$__um_bndl_dir/$BUNDLE_MERGERS_LIST"
+	__um_home="$2"
+	__um_mergers="$__um_home/$BUNDLE_MERGERS_LIST"
 
 	if ! test -d "$__um_mergers"; then
 		return 0
 	fi
 
-	debug "${dry_run_prefix}Update Bundle Mergers: $__um_bndl_dir"
+	debug "${dry_run_prefix}Update Bundle Mergers: $__um_home"
 	iterate_all_files "$__um_mergers" \
-		update_merger "$__um_bndl_dir" "$__um_mergers/" "$HOME/"
+		update_merger "$__um_home" "$__um_mergers/" "$HOME/"
 }
 
 ########
@@ -530,7 +528,8 @@ update_merger() {
 	if test "x$__dum_merger" = "x"; then
 		__dum_merger="cat"
 	else
-		if ! echo "$__dum_merger" | grep '^/' > /dev/null 2>&1; then
+		if test "${__dum_merger#/}" = "$__dum_merger"; then
+			# Relative path, doesn't start with /
 			__dum_merger="$__dum_bndl_home/home/$__dum_merger"
 		fi
 	fi
@@ -551,13 +550,13 @@ update_merger() {
 }
 
 ########
-## verify_bundle_source <dir>
+## verify_bundle_source <home>
 verify_bundle_source() {
-	__vb_dir="$1"
+	__vb_home="$1"
 
-	__vb_conf_file="$__vb_dir/$BUNDLE_CONF_FILE"
+	__vb_conf_file="$__vb_home/$BUNDLE_CONF_FILE"
 	if test ! -r "$__vb_conf_file" -o -d "$__vb_conf_file"; then
-		echo "$self_short: $__vb_dir does not appear to be a p13n package" >&2
+		echo "$self_short: $__vb_home does not appear to be a p13n package" >&2
 		echo "" >&2
 		echo "Missing config file: $__vb_conf_file" >&2
 		return 1
@@ -567,7 +566,7 @@ verify_bundle_source() {
 	for __vb_param in "$NAME_PARAM"; do
 		value="$(read_config "$__vb_conf_file" "$__vb_param")"
 		if test "x$value" = "x"; then
-			echo "$self_short: $__vb_dir is a malformed package: $__vb_param not defined" >&2
+			echo "$self_short: $__vb_home is a malformed package: $__vb_param not defined" >&2
 			return 1
 		fi
 	done
@@ -582,7 +581,7 @@ verify_bundle_source() {
 		fi
 	done
 	if $__vb_missing_work; then
-		echo "$self_short: $__vb_dir is a malformed package: must have one of $FILESDIR_PARAM, $MERGEDIR_PARAM defined" >&2
+		echo "$self_short: $__vb_home is a malformed package: must have one of $FILESDIR_PARAM, $MERGEDIR_PARAM defined" >&2
 		return 1
 	fi
 }
@@ -708,10 +707,11 @@ read_link() {
 			break;
 		fi
 
-		if echo "x$__rl_deref" | grep '^x/' > /dev/null 2>&1; then
-			__rl_path="$__rl_deref"
-		else
+		if test "${__rl_deref#/}" = "$__rl_deref"; then
+			# Relative link, doesn't start with /
 			__rl_path="$(dirname "$__rl_path")/$__rl_deref"
+		else
+			__rl_path="$__rl_deref"
 		fi
 	done
 
@@ -777,17 +777,17 @@ __getopt() {
 }
 
 __quote() {
+	# echo on some systems can swallow option-like strings (such as -n).
+	# printf doesn't have this problem.
 	__quote_ret=""
 	for __quote_arg; do
-		if echo "x${__quote_arg}" | grep "[^a-zA-Z0-9_+./-]" > /dev/null 2>&1; then
+		if printf "%s" "${__quote_arg}" | grep "[^a-zA-Z0-9_+./-]" > /dev/null 2>&1; then
 			__quote_ret="$__quote_ret '$(echo "$__quote_arg" | sed "s/'/'\\\\''/g")'"
 		else
 			__quote_ret="$__quote_ret $__quote_arg"
 		fi
 	done
 
-	# echo on some systems can swallow option-like strings (such as -n).
-	# printf doesn't have this problem.
 	printf "%s" "${__quote_ret#?}"
 }
 
