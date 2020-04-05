@@ -1,6 +1,7 @@
 # vim: set filetype=sh:
 
 # Finally load files form $HOME/.profile.d, for third-party initialization
-for file in `find -L $HOME/.profile.d -type f -name '[^.]*.sh' 2> /dev/null | sort`; do
-	. "$file"
+for __p13n_file in `find -L $HOME/.profile.d -type f -name '[^.]*.sh' 2> /dev/null | sort`; do
+	. "$__p13n_file"
 done
+unset `set | awk -F= '/^__p13n_.*=/ { print $1 }'`

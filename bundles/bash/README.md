@@ -13,8 +13,10 @@ This bundle provides:
 * Automatic inclusion into `~/.profile` of files that end in `.sh` and are
   placed in `~/.profile.d`.
 * Inclusion of `p13n`'s `bin` directory in your path.
+* Automatically delete any variables that begin with `__p13n_`, simplifying the
+  use of temporary variables without the need to clean up.
 
 After installing, your `~/.bashrc`, `~/.bash_profile` and `~/.profile`
 files will be backed up (with `.p13n.<date-time>` appended). These
-backups should be included in an appropriate bundle and installed in
+backups can be included in an appropriate bundle and installed in
 `~/.bashrc.d` or `~/.profile.d`.
