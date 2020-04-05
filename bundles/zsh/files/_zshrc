@@ -1,0 +1,14 @@
+# vim: set filetype=zsh:
+
+__p13n_home="$(cd "$HOME" > /dev/null 2>&1 && cd "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink .bashrc)")")")")" > /dev/null 2>&1 && pwd)"
+if test -n $__p13n_home; then
+	append_path "$__p13n_home/bin"
+fi
+
+# Finally load files form $HOME/.zshrc.d, for third-party initialization
+find -L $HOME/.zshrc.d -type f -name '[^.]*.zsh' 2> /dev/null | sort | while read __p13n_file; do
+	. "$__p13n_file"
+done
+
+# Unset any temporary variables defined by p13n
+unset $(set + | grep '^__p13n_')

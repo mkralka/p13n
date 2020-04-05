@@ -1,0 +1,9 @@
+# vim: set filetype=zsh:
+
+# Load files form $HOME/.zlogin.d, for third-party initialization
+find -L $HOME/.zlogin.d -type f -name '[^.]*.zsh' 2> /dev/null | sort | while read __p13n_file; do
+	. "$__p13n_file"
+done
+
+# Unset any temporary variables defined by p13n
+unset $(set + | grep '^__p13n_')
