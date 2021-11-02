@@ -5,7 +5,7 @@
 ##
 
 # Load helper functions associated with the zsh bundle
-__p13n_home="$(cd "$HOME" > /dev/null 2>&1 && cd "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink .bashrc)")")")")" > /dev/null 2>&1 && pwd)"
+__p13n_home="$(cd "$HOME" > /dev/null 2>&1 && cd "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink .zshenv)")")")")" > /dev/null 2>&1 && pwd)"
 if test -n $__p13n_home; then
 	# Load any functions it defines.
 	find -L $__p13n_home/bundles/zsh/libexec -maxdepth 1 -mindepth 1 -type f -name '[^.]*.zsh' | sort | while read __p13n_file; do

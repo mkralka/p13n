@@ -1,6 +1,6 @@
 # vim: set filetype=zsh:
 
-__p13n_home="$(cd "$HOME" > /dev/null 2>&1 && cd "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink .bashrc)")")")")" > /dev/null 2>&1 && pwd)"
+__p13n_home="$(cd "$HOME" > /dev/null 2>&1 && cd "$(dirname "$(dirname "$(dirname "$(dirname "$(readlink .zshrc)")")")")" > /dev/null 2>&1 && pwd)"
 if test -n $__p13n_home; then
 	append_path "$__p13n_home/bin"
 fi
