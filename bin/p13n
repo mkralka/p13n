@@ -523,6 +523,7 @@ update_merger() {
 
 	__dum_merger="$(read_config "$__dum_abssrc" "merger")"
 	__dum_mergesrcdir="$(read_config "$__dum_abssrc" "srcdir")"
+	__dum_chmod="$(read_config "$__dum_abssrc" "chmod")"
 
 	info "${dry_run_prefix}Merging: $__dum_dst"
 	if test "x$__dum_merger" = "x"; then
@@ -546,6 +547,9 @@ update_merger() {
 	else
 		find -L "$__dum_mergesrcdir" -mindepth 1 -maxdepth 1 -type f 2> /dev/null | sort |
 			xargs "$__dum_merger" > "$__dum_absdst"
+	fi
+	if test "x$__dum_chmod" != "x" -a -e "$__dum_absdst"; then
+		run_destructive_command chmod "$__dum_chmod" "$__dum_absdst"
 	fi
 }
 
