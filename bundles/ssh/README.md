@@ -11,6 +11,4 @@ This bundle provides:
 
 After installing, your `~/.ssh/config` file will be backed up (with
 `.p13n.<date-time>` appended). This backup should be included in an
-appropriate bundle and installed in `~/.ssh/config.d`. Finally, run:
-
-    p13n refresh
+appropriate bundle and installed in `~/.ssh/config.d`.
