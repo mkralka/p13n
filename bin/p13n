@@ -183,7 +183,7 @@ do_install() {
 		bndl_home="$p13n_bundles/$name"
 
 		run_destructive_command mkdir -p "$bndl_home" || return
-		install_bundle_files "$dir" || return
+		install_bundle_files "$HOME/" "$dir" || return
 
 		# Link this bundle back to its source, for updates etc.
 		bndl_home_link="$bndl_home/home"
@@ -209,7 +209,7 @@ do_install() {
 			fi
 		done
 	else
-		update_mergers
+		update_mergers "$HOME/"
 	fi
 }
 
@@ -264,7 +264,7 @@ do_update(){
 
 	if test $# -le 0; then
 		iterate_installed_bundles verify_installed_bundle_source || return
-		iterate_installed_bundles update_bundle_files || return
+		iterate_installed_bundles update_bundle_files "$HOME/" || return
 	else
 		for bundle; do
 			if ! test -d "$p13n_bundles/$bundle"; then
@@ -275,11 +275,11 @@ do_update(){
 		done
 
 		for bundle; do
-			update_bundle_files "$bundle" "$p13n_bundles/$bundle" "$(read_link "$p13n_bundles/$bundle/home")" || return
+			update_bundle_files "$HOME/" "$bundle" "$p13n_bundles/$bundle" "$(read_link "$p13n_bundles/$bundle/home")" || return
 		done
 	fi
 
-	update_mergers
+	update_mergers "$HOME/"
 }
 
 print_update_usage() {
@@ -339,7 +339,7 @@ do_refresh() {
 		return 1
 	fi
 
-	update_mergers
+	update_mergers "$HOME/"
 }
 
 print_refresh_usage() {
@@ -363,9 +363,10 @@ print_refresh_help() {
 }
 
 ########
-## install_bundle_files <source>
+## install_bundle_files <dstdir> <source>
 install_bundle_files() {
-	__ibf_source="$1"
+	__ibf_dstdir="$1"
+	__ibf_source="$2"
 
 	__ibf_conf_file="$__ibf_source/$BUNDLE_CONF_FILE"
 	__ibf_name="$(read_config "$__ibf_conf_file" "$NAME_PARAM")"
@@ -378,7 +379,7 @@ install_bundle_files() {
 	if test "x$__ibf_filesdir" != "x"; then
 		__ibf_abs_filesdir="$(cd "$__ibf_source/$__ibf_filesdir"; pwd)"
 		iterate_all_files "$__ibf_abs_filesdir" \
-			install_file "$__ibf_files" "$__ibf_abs_filesdir/" "$HOME/"
+			install_file "$__ibf_files" "$__ibf_abs_filesdir/" "$__ibf_dstdir"
 	fi
 
 	__ibf_mergers="$__ibf_home/$BUNDLE_MERGERS_LIST"
@@ -386,38 +387,40 @@ install_bundle_files() {
 	if test "x$__ibf_mergedir" != "x"; then
 		__ibf_abs_mergedir="$(cd "$__ibf_source/$__ibf_mergedir"; pwd)"
 		iterate_all_files "$__ibf_abs_mergedir" \
-			install_merger "$__ibf_mergers/" "$__ibf_abs_mergedir/" "$HOME/"
+			install_merger "$__ibf_mergers/" "$__ibf_abs_mergedir/" "$__ibf_dstdir"
 	fi
 }
 
 ########
-## remove_bundle_files <name> <home> <source>
+## remove_bundle_files <dstdir> <name> <home> <source>
 remove_bundle_files() {
-	__rbf_name="$1"
-	__rbf_home="$2"
-	__rbf_source="$3"
+	__rbf_dstdir="$1"
+	__rbf_name="$2"
+	__rbf_home="$3"
+	__rbf_source="$4"
 
 	__rbf_files="$__rbf_home/$BUNDLE_FILES_LIST"
 	if test -f "$__rbf_files"; then
 		cat "$__rbf_files" | while read __rbf_file; do
 			info "${dry_run_prefix}Remove:  $__rbf_file"
-			run_destructive_command rm -f "$__rbf_file"
+			run_destructive_command rm -f "$__rbf_dstdir$__rbf_file"
 		done
 	fi
 
 	__rbf_mergers="$__rbf_home/$BUNDLE_MERGERS_LIST"
-	iterate_all_files "$__rbf_mergers" remove_merger "$HOME/"
+	iterate_all_files "$__rbf_mergers" remove_merger "$__rbf_dstdir"
 }
 
 ########
-## update_bundle_files <name> <home> <source>
+## update_bundle_files <dstdir> <name> <home> <source>
 update_bundle_files() {
-	__ubf_name="$1"
-	__ubf_home="$2"
-	__ubf_source="$3"
+	__ubf_dstdir="$1"
+	__ubf_name="$2"
+	__ubf_home="$3"
+	__ubf_source="$4"
 
-	remove_bundle_files "$__ubf_name" "$__ubf_home" "$__ubf_source" || return
-	install_bundle_files "$__ubf_source" || return
+	remove_bundle_files "$__ubf_dstdir" "$__ubf_name" "$__ubf_home" "$__ubf_source" || return
+	install_bundle_files "$__ubf_dstdir" "$__ubf_source" || return
 }
 
 ########
@@ -489,15 +492,16 @@ remove_merger() {
 }
 
 ########
-## update_mergers
+## update_mergers <dstdir>
 update_mergers() {
-	iterate_installed_bundles update_bndl_mergers
+	iterate_installed_bundles update_bndl_mergers "$1"
 }
 
 ########
-## update_bndl_mergers <name> <home> <source>
+## update_bndl_mergers <dstdir> <name> <home> <source>
 update_bndl_mergers() {
-	__um_home="$2"
+	__um_dstdir="$1"
+	__um_home="$3"
 	__um_mergers="$__um_home/$BUNDLE_MERGERS_LIST"
 
 	if ! test -d "$__um_mergers"; then
@@ -506,7 +510,7 @@ update_bndl_mergers() {
 
 	debug "${dry_run_prefix}Update Bundle Mergers: $__um_home"
 	iterate_all_files "$__um_mergers" \
-		update_merger "$__um_home" "$__um_mergers/" "$HOME/"
+		update_merger "$__um_home" "$__um_mergers/" "$__um_dstdir"
 }
 
 ########
