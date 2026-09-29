@@ -16,6 +16,8 @@ NAME_PARAM="name"
 FILESDIR_PARAM="filesdir"
 MERGEDIR_PARAM="mergedir"
 
+LEAF_TEST_CMD="__is-leaf"
+
 BUNDLE_CONF_FILE="p13n.conf"
 BUNDLE_FILES_LIST="files"
 BUNDLE_MERGERS_LIST="mergers"
@@ -76,6 +78,10 @@ main() {
 	shift
 
 	case "$cmd" in
+		"$LEAF_TEST_CMD")
+			is_leaf_path "$1"
+			return $?
+			;;
 		install)
 			do_install "$@"
 			return $?
@@ -469,6 +475,11 @@ install_merger() {
 
 	__dim_rellink="$(relative_link "$__dim_abssrc" "$__dim_absdst")"
 
+	if is_leaf_path "$__dim_src"; then
+		echo "$self_short: ignoring leaf directory in $MERGEDIR_PARAM: $__dim_src" >&2
+		return 0
+	fi
+
 	info "${dry_run_prefix}Setup Merger: $__dim_dst"
 	verbose "Relative link: $__dim_rellink"
 	run_destructive_command mkdir -p "$__dim_absdstdir"
@@ -660,9 +671,75 @@ iterate_installed_bundles() {
 iterate_all_files() {
 	__iaf_dir="$1"
 	shift
-	find -L "$__iaf_dir" -mindepth 1 -type f -not -name '.*' 2> /dev/null | cut -b $((${#__iaf_dir} + 2))- | while read __iaf_file; do
-		"$@" "$__iaf_file" "$(echo "$__iaf_file" | sed -e 's|/_|/.|g' -e 's|^_|.|')"
+
+	# A leaf directory is visited in place of everything beneath it. find(1)
+	# cannot recognize one on its own (the marker is a parity, which a glob
+	# cannot express), so it defers to is_leaf_path via this script.
+	find -L "$__iaf_dir" -mindepth 1 \
+		\( -type d -name '*@' -exec "$self" "$LEAF_TEST_CMD" '{}' \; -print -prune \) -o \
+		\( -type f -not -name '.*' -print \) \
+		2> /dev/null | cut -b $((${#__iaf_dir} + 2))- | while read __iaf_file; do
+		"$@" "$__iaf_file" "$(translate_name "$__iaf_file")"
 	done
+}
+
+########
+## is_leaf_path <path>
+##
+## Determine whether <path> is a self-contained unit, to be installed as a
+## single symlink instead of having its contents installed individually. This
+## is indicated by an odd number of '@' characters at the end of <path>.
+is_leaf_path() {
+	# ${1##*[!@]} strips everything up to the last non-'@' character, leaving
+	# the trailing run of '@' (or the whole string, if it is entirely '@').
+	__ilp_run="${1##*[!@]}"
+	# Consume the run two at a time; only an odd run leaves one behind.
+	while test ${#__ilp_run} -gt 1; do
+		__ilp_run="${__ilp_run#??}"
+	done
+	test ${#__ilp_run} -eq 1
+}
+
+########
+## translate_name <path>
+##
+## Translate a bundle-relative source path into the path it is installed to,
+## relative to the destination directory. In each component, a leading
+## underscore (_) becomes a leading dot (.), and a trailing run of N '@'
+## characters becomes N/2 of them (rounded down); the odd '@' out, if any, is
+## the leaf marker (see is_leaf_path) and is consumed.
+translate_name() {
+	__tn_out=""
+	__tn_rest="$1"
+	while test -n "$__tn_rest"; do
+		case "$__tn_rest" in
+			*/*)
+				__tn_comp="${__tn_rest%%/*}"
+				__tn_rest="${__tn_rest#*/}"
+				;;
+			*)
+				__tn_comp="$__tn_rest"
+				__tn_rest=""
+				;;
+		esac
+
+		__tn_run="${__tn_comp##*[!@]}"
+		__tn_base="${__tn_comp%"$__tn_run"}"
+		__tn_keep=""
+		while test ${#__tn_run} -gt 1; do
+			__tn_run="${__tn_run#??}"
+			__tn_keep="$__tn_keep@"
+		done
+
+		case "$__tn_base" in
+			_*)
+				__tn_base=".${__tn_base#_}"
+				;;
+		esac
+
+		__tn_out="$__tn_out/$__tn_base$__tn_keep"
+	done
+	printf '%s\n' "${__tn_out#/}"
 }
 
 ########
