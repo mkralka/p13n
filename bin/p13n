@@ -603,6 +603,94 @@ verify_bundle_source() {
 		echo "$self_short: $__vb_home is a malformed package: must have one of $FILESDIR_PARAM, $MERGEDIR_PARAM defined" >&2
 		return 1
 	fi
+
+	__vb_dests="$(list_bundle_dests "$__vb_home")"
+
+	__vb_unusable="$(echo "$__vb_dests" | filter_unusable_dests)"
+	if test "x$__vb_unusable" != "x"; then
+		echo "$self_short: $__vb_home installs to unusable paths:" >&2
+		echo "$__vb_unusable" | sed 's|^|    |' >&2
+		return 1
+	fi
+
+	__vb_collisions="$(find_collisions "$__vb_dests")"
+	if test "x$__vb_collisions" != "x"; then
+		echo "$self_short: $__vb_home installs more than one file to:" >&2
+		echo "$__vb_collisions" | sed 's|^|    |' >&2
+		return 1
+	fi
+}
+
+########
+## list_bundle_dests <source>
+##
+## Write the path that every file of the bundle rooted at <source> installs
+## to; one per line, relative to the destination directory. A path is written
+## once for each file that installs to it.
+list_bundle_dests() {
+	__lbd_source="$1"
+	__lbd_conf_file="$__lbd_source/$BUNDLE_CONF_FILE"
+
+	for __lbd_param in "$FILESDIR_PARAM" "$MERGEDIR_PARAM"; do
+		__lbd_dir="$(read_config "$__lbd_conf_file" "$__lbd_param")"
+		if test "x$__lbd_dir" != "x"; then
+			iterate_all_files "$(cd "$__lbd_source/$__lbd_dir"; pwd)" echo_dest
+		fi
+	done
+}
+
+########
+## echo_dest <src> <dst>
+##
+## An iterate_all_files callable reporting only where the file installs.
+echo_dest() {
+	echo "$2"
+}
+
+########
+## filter_unusable_dests
+##
+## Copy those paths read from standard input that cannot be installed,
+## because some component of the path is empty, "." or "..".
+filter_unusable_dests() {
+	while read __fud_dest; do
+		# Wrapping in slashes bounds every component, so one pattern per kind
+		# matches it at any position in the path.
+		case "/$__fud_dest/" in
+			*//*|*/./*|*/../*)
+				echo "$__fud_dest"
+				;;
+		esac
+	done
+}
+
+########
+## find_collisions <dests>
+##
+## Write those paths in <dests> that more than one file needs to occupy, one
+## per line.
+find_collisions() {
+	# Everything installed is a symlink and every directory exists only to
+	# make room for one, so a path is claimed by a single install or by any
+	# number of descendants, never both. Counting installs with their repeats
+	# exposes two installs of one path; counting each ancestor of each install
+	# once keeps a shared directory from looking like a second claim.
+	{
+		echo "$1"
+		echo "$1" | while read __fc_dest; do
+			while :; do
+				case "$__fc_dest" in
+					*/*)
+						__fc_dest="${__fc_dest%/*}"
+						;;
+					*)
+						break
+						;;
+				esac
+				echo "$__fc_dest"
+			done
+		done | sort -u
+	} | sort | uniq -d
 }
 
 run_destructive_command() {

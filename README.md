@@ -196,6 +196,36 @@ translated by replacing leading underscores (`_`) with leading dots (`.`). For
 example, to install `~/.ssh/config`, create a file `_ssh/config` (relative to
 the `filesdir` value).
 
+### Installing a directory as a single unit
+Sometimes a directory is self-contained and the files beneath it should not be
+managed individually (e.g., a plugin or skill directory that is added, updated,
+and removed as a whole). Appending an at sign (`@`) to a directory name
+installs that directory itself as a symlink, without descending into it. For
+example, to install `~/.claude/skills/dataviz`, create a directory
+`_claude/skills/dataviz@` (relative to the `filesdir` value):
+
+    $ ls -l ~/.claude/skills/dataviz
+    lrwxr-xr-x  1 mkralka  staff  41 Jun 10 23:12 /Users/mkralka/.claude/skills/dataviz -> dev/p13n-mdk/files/_claude/skills/dataviz@
+
+Because the installed directory is a symlink, files added to or removed from it
+within the bundle take effect immediately, without an `update`.
+
+An `@` is only meaningful on a directory; a regular file is always installed as
+a symlink. To install a file or directory whose name genuinely ends in an `@`,
+double each one. A trailing run of N at signs is installed as N/2 of them
+(rounded down); the odd one out, if any, is the marker.
+
+| Source                       | Installed                    | Description                                                   |
+|:-----------------------------|:-----------------------------|:--------------------------------------------------------------|
+|`skills/dataviz/SKILL.md`     |`~/skills/dataviz/SKILL.md`   |A directory holding one symlink per file.                      |
+|`skills/dataviz@/SKILL.md`    |`~/skills/dataviz`            |A symlink to the bundle's `dataviz@` directory.                |
+|`skills/dataviz@@/SKILL.md`   |`~/skills/dataviz@/SKILL.md`  |A directory named `dataviz@`, holding one symlink per file.    |
+|`skills/dataviz@@@/SKILL.md`  |`~/skills/dataviz@`           |A symlink to the bundle's `dataviz@@@` directory.              |
+
+`@` is not supported within `mergedir`. A merged file is described by its
+contents, which a directory cannot provide, so such directories are ignored
+with a warning.
+
 ### Creating dynamically generated (merged) files
 All of the files contained within `mergedir` define a file to be merged.  The
 same rules for determining where a regular file is installed apply to
