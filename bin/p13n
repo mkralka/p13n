@@ -469,6 +469,11 @@ install_merger() {
 
 	__dim_rellink="$(relative_link "$__dim_abssrc" "$__dim_absdst")"
 
+	if test -d "$__dim_abssrc"; then
+		echo "$self_short: ignoring leaf directory in $MERGEDIR_PARAM: $__dim_src" >&2
+		return 0
+	fi
+
 	info "${dry_run_prefix}Setup Merger: $__dim_dst"
 	verbose "Relative link: $__dim_rellink"
 	run_destructive_command mkdir -p "$__dim_absdstdir"
@@ -524,6 +529,10 @@ update_merger() {
 
 	__dum_abssrc="$__dum_srcdir$__dum_src"
 	__dum_absdst="$__dum_dstdir$__dum_dst"
+
+	if test -d "$__dum_abssrc"; then
+		return 0
+	fi
 
 	__dum_merger="$(read_config "$__dum_abssrc" "merger")"
 	__dum_mergesrcdir="$(read_config "$__dum_abssrc" "srcdir")"
@@ -592,6 +601,51 @@ verify_bundle_source() {
 		echo "$self_short: $__vb_home is a malformed package: must have one of $FILESDIR_PARAM, $MERGEDIR_PARAM defined" >&2
 		return 1
 	fi
+
+	for __vb_param in "$FILESDIR_PARAM" "$MERGEDIR_PARAM"; do
+		__vb_dir="$(read_config "$__vb_conf_file" "$__vb_param")"
+		if test "x$__vb_dir" != "x"; then
+			__vb_dir="$__vb_home/$__vb_dir"
+			iterate_all_files "$__vb_dir" print_file_destination "$__vb_param" "$__vb_dir/"
+		fi
+	done | awk -v self="$self_short" -v bundle="$__vb_home" '
+		{
+			# Bound components to catch empty, dot, and dot-dot names.
+			if ("/" $0 "/" ~ /\/\/|\/\.\.?\//) {
+				unusable[$0] = 1
+				next
+			}
+			files[$0]++
+			parent = $0
+			while (sub(/\/[^\/]*$/, "", parent))
+				dirs[parent] = 1
+		}
+		END {
+			header = self ": " bundle " has invalid install destinations:"
+			for (path in unusable) {
+				if (!errors++) print header
+				printf "    Unusable path: %s\n", path
+			}
+			# Shared parents are valid; installing a file at a parent is not.
+			for (path in files)
+				if (files[path] > 1 || path in dirs) {
+					if (!errors++) print header
+					printf "    Colliding path: %s\n", path
+				}
+			exit (errors > 0)
+		}
+	' >&2
+}
+
+########
+## print_file_destination <param> <srcdir> <src> <dst>
+##
+## Report an installed destination, excluding leaf directories in mergedir.
+print_file_destination() {
+	if test "$1" = "$MERGEDIR_PARAM" && test -d "$2$3"; then
+		return 0
+	fi
+	printf '%s\n' "$4"
 }
 
 run_destructive_command() {
@@ -660,9 +714,36 @@ iterate_installed_bundles() {
 iterate_all_files() {
 	__iaf_dir="$1"
 	shift
-	find -L "$__iaf_dir" -mindepth 1 -type f -not -name '.*' 2> /dev/null | cut -b $((${#__iaf_dir} + 2))- | while read __iaf_file; do
-		"$@" "$__iaf_file" "$(echo "$__iaf_file" | sed -e 's|/_|/.|g' -e 's|^_|.|')"
+
+	# Prune directories with an odd trailing @ count; paired @ characters
+	# belong to the name and do not stop traversal.
+	find -L "$__iaf_dir" -mindepth 1 \
+		\( -type d -name '*@' -exec sh -c '
+			run="${1##*[!@]}"
+			test $((${#run} % 2)) -eq 1
+		' sh '{}' \; -print -prune \) -o \
+		\( -type f -not -name '.*' -print \) \
+		2> /dev/null | cut -b $((${#__iaf_dir} + 2))- | while IFS= read -r __iaf_file; do
+		"$@" "$__iaf_file" "$(translate_name "$__iaf_file")"
 	done
+}
+
+########
+## translate_name <path>
+##
+## Translate a bundle-relative path to its destination: change each leading
+## underscore to a dot and halve each trailing run of @ characters.
+translate_name() {
+	printf '%s\n' "$1" | awk -F/ '{
+		for (i = 1; i <= NF; i++) {
+			sub(/^_/, ".", $i)
+			match($i, /@*$/)
+			printf "%s%s", (i > 1 ? "/" : ""), substr($i, 1, RSTART - 1)
+			for (n = int(RLENGTH / 2); n > 0; n--)
+				printf "@"
+		}
+		print ""
+	}'
 }
 
 ########
